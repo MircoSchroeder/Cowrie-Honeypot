@@ -1,41 +1,62 @@
-🛡️ Project Overview
-This project demonstrates the deployment, maintenance, and analysis of a Cowrie Honeypot to monitor real-world automated attacks and malware campaigns. By simulating a vulnerable SSH server, I collected and analyzed TTY sessions and malicious binaries to understand modern attack patterns like Cryptojacking and Data Exfiltration.
-Key Technical Skills Demonstrated:
- * Linux Administration: Hardening, SSH configuration, and process monitoring.
- * Network Security: Port redirection, firewall management (iptables/nftables).
- * Forensics & Analysis: Log file parsing, malware behavior analysis, and TTY session reconstruction.
-🏗️ Deployment & Architecture
-Describe how you built it. For a SysAdmin role, this is the most important part!
- * OS: Ubuntu 22.04 LTS (Hardened)
- * Environment: Docker / Virtual Private Server (VPS)
- * Redirection: Used iptables to redirect traffic from port 22 to the Cowrie listener on port 2222.
- * Logging: Integrated with JSON logs for automated parsing.
-> Internal Tooling: [Optional: Mention if you used ELK Stack, Splunk, or just custom Bash scripts for analysis].
-> 
-🔍 Case Study: March 2026 Attack Campaign
-Here you use the info from your screenshot.
-Based on the analysis of collected TTY sessions and downloads, a highly coordinated campaign by actors RedTail and Multiverze was identified.
-1. Attack Phases
- * Reconnaissance: Automated scripts used uname, whoami, and netstat with custom delimiters (e.g., BSEP_A1B2C3) for database parsing.
- * Data Exfiltration: Targeted search for Telegram session data (.local/share/TelegramDesktop) and SMS gateway interfaces (/dev/ttyUSB), likely to bypass Two-Factor Authentication (2FA).
- * Infection: Redundant download strategy using curl, wget, and TCP-redirection from Alibaba Cloud IPs.
-2. Malware Analysis (Cryptojacking)
- * Payloads: Multistage attack deploying Monero (XMR) miners.
- * Persistence: Automated injection of SSH public keys into authorized_keys.
- * Evasion: * Use of memfd_create for fileless execution in RAM.
-   * UPX-packed binaries and static compilation to remain environment-independent.
-   * Cleanup scripts (clean.sh) to remove competing malware/miners.
-🛠️ Maintenance & Operations
-This shows you can "run" a system long-term.
- * Log Rotation: Configured to prevent disk exhaustion during mass-scanning events.
- * Monitoring: [Describe how you check if it's still alive – e.g., a simple Cronjob or Uptime-Kuma].
- * System Updates: Regular patching of the host OS while maintaining the "vulnerable" state of the container.
-📈 Lessons Learned
- * Automated Aggression: The speed at which attackers deploy cleanup scripts shows a highly competitive "market" for hijacked CPU power.
- * Beyond Mining: The focus on SMS and Telegram logs indicates that simple cryptojacking is often paired with identity theft.
- * Detection: Standard file scanners are insufficient against modern memfd_create techniques; behavior-based monitoring is key.
-Was du noch hinzufügen könntest (der "Pro"-Faktor):
- * Ein kleiner "How to run this"-Teil: Ein kurzes docker-compose.yml Snippet in der README zeigt, dass du mit "Infrastructure as Code" vertraut bist.
- * Screenshots: Wenn du ein Dashboard hast (z.B. von den Cowrie-Logs), füge einen Screenshot ein. Visuelle Beweise wirken bei Recruitern Wunder.
- * Security Note: Füge einen Disclaimer hinzu ("This was built for research purposes in a controlled environment"), das zeigt Verantwortungsbewusstsein.
-![IMG_4761](https://github.com/user-attachments/assets/7dfdab5d-1d1e-4b4d-bd3e-763f4492a3ed)
+🛡️ Projektübersicht
+Dieses Projekt demonstriert die Bereitstellung, Wartung und Analyse eines Cowrie-Honeypots zur Überwachung realer automatisierter Angriffe und Malware-Kampagnen. Durch die Simulation eines verwundbaren SSH-Servers habe ich TTY-Sitzungen und bösartige Binärdateien gesammelt, um moderne Angriffsmuster wie Cryptojacking und Datenexfiltration zu verstehen.
+Wichtige technische Kernkompetenzen:
+ * Linux-Administration: Systemhärtung, SSH-Konfiguration und Prozessüberwachung.
+ * Netzwerksicherheit: Port-Redirection, Firewall-Management (iptables/nftables).
+ * Forensik & Analyse: Log-Parsing, Malware-Verhaltensanalyse und TTY-Sitzungsrekonstruktion.
+___________________________________
+
+🏗️ Bereitstellung & Architektur
+Der Fokus lag hier auf einer stabilen und isolierten Umgebung, um das Host-System vor Ausbrüchen zu schützen.
+ * Betriebssystem: Ubuntu 22.04 LTS (gehärtet)
+ * Umgebung: Docker auf einem Virtual Private Server (VPS)
+
+![IMG_4871](https://github.com/user-attachments/assets/37551694-8240-41b1-a79a-482cdb1cbf9c)
+
+   
+ * Netzwerk: Einsatz von iptables, um eingehenden Traffic von Port 22 auf den Cowrie-Listener (Port 2222) umzuleiten.
+ * Protokollierung: Integration von JSON-Logs für eine automatisierte Auswertung.
+> Internal Tooling: Zur Analyse wurden benutzerdefinierte Python-Skripte eingesetzt.
+___________________________________
+
+🔍 Fallstudie: Angriffskampagne März 2026
+Basierend auf der Analyse der gesammelten TTY-Sitzungen und Downloads wurde eine koordinierte Kampagne der Akteure RedTail und Multiverze identifiziert.
+
+![IMG_4874](https://github.com/user-attachments/assets/2357231d-5d5f-4c10-a844-b64f188bdac8)
+![IMG_4873](https://github.com/user-attachments/assets/c5554393-2540-445b-9adb-dea3710536d9)
+
+
+1. Angriffsphasen
+ * Reconnaissance (Aufklärung): Automatisierte Skripte nutzten Befehle wie uname, whoami und netstat mit speziellen Delimitern (z. B. BSEP_A1B2C3), um die Ergebnisse effizient für Datenbanken zu parsen.
+ * Datenexfiltration: Gezielte Suche nach Telegram-Sitzungsdaten (.local/share/TelegramDesktop) und SMS-Gateway-Schnittstellen (/dev/ttyUSB), vermutlich um Multi-Faktor-Authentifizierungen (2FA) zu umgehen.
+ * Infektion: Redundante Download-Strategie mittels curl, wget und TCP-Redirection über IP-Adressen der Alibaba Cloud.
+2. Malware-Analyse (Cryptojacking)
+ * Payloads: Mehrstufiger Angriff zur Installation von Monero (XMR) Minern.
+ * Persistenz: Automatische Injektion von SSH-Public-Keys in die authorized_keys.
+ * Evasion (Tarnung):
+   * Nutzung von memfd_create für Fileless Execution direkt im RAM.
+   * UPX-gepackte Binärdateien und statische Kompilierung für maximale Kompatibilität.
+   * Einsatz von Cleanup-Skripten (clean.sh), um konkurrierende Malware und Miner zu entfernen.
+___________________________________
+
+🛠️ Wartung & Betrieb
+Ein produktiver Honeypot erfordert kontinuierliches Management:
+ * Log-Rotation: Konfiguriert, um Speicherplatzmangel bei Massenscans zu verhindern.
+ * Monitoring: Überwachung der Systemverfügbarkeit via Uptime-Kuma.
+ * System-Updates: Regelmäßiges Patchen des Host-Betriebssystems, während der "verwundbare" Zustand des Containers für die Forschung erhalten bleibt.
+___________________________________
+
+📈 Erkenntnisse (Lessons Learned)
+ * Automatisierte Aggression: Die Geschwindigkeit, mit der Angreifer Bereinigungsskripte einsetzen, zeigt einen hart umkämpften "Markt" für gekaperte CPU-Leistung.
+
+ * Mehr als nur Mining: Der Fokus auf SMS- und Telegram-Logs beweist, dass Cryptojacking oft nur der erste Schritt zum Identitätsdiebstahl ist.
+   
+ * Detektion: Standard-Dateiscanner greifen bei modernen memfd_create-Techniken ins Leere; verhaltensbasierte Überwachung ist essenziell.
+
+   ![IMG_4875](https://github.com/user-attachments/assets/af69de1e-5187-46cd-895c-a935105e65bc)
+
+   ![IMG_4751](https://github.com/user-attachments/assets/3dcc543d-aca7-4c75-835b-5781a9c37a55)
+
+
+
+ * Security Note: Haftungsausschluss: Dieses Projekt wurde ausschließlich zu Forschungszwecken in einer kontrollierten Umgebung erstellt.
