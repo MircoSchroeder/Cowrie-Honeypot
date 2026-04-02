@@ -102,11 +102,13 @@ The key comment `mdrfckr` in the public key string allowed correlation across mu
 
 Cowrie's download capture feature saved all files that attackers attempted to fetch or execute. The files were stored with their SHA256 hashes as filenames — a common convention for malware repositories.
 
-![Malware Downloads - Part 1](screenshots/cowrie_downloads_1.jpg)
+![Malware Downloads](screenshots/cowrie_downloads_1.jpg)
 *Cowrie download directory — captured binaries stored by SHA256 hash. Note file sizes ranging from small stagers (96 bytes) to full payloads (30+ MB).*
 
-![Malware Downloads - Part 2](screenshots/tty_directory.jpg)
-*Additional captured samples — timestamps show activity across multiple days, indicating sustained campaign activity.*
+Cowrie also records every attacker TTY session as a separate file, allowing full reconstruction of what was typed and executed.
+
+![TTY Session Directory](screenshots/tty_directory.jpg)
+*Cowrie TTY session directory — each file represents a complete recorded attacker session, stored for forensic replay.*
 
 ### Attacker Dropper Command
 
