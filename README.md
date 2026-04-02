@@ -53,7 +53,7 @@ Cowrie runs natively on the host (migrated from Docker) for better log access an
 
 The following screenshot shows Cowrie's debug output during a live attack session — including the SSH key exchange (`curve25519-sha256`), cipher negotiation (`aes256-ctr`), and a failed login attempt with username `planka` / password `123456`.
 
-![Cowrie Live Log](screenshots/cowrie_live_log.jpeg)
+![Cowrie Live Log](screenshots/cowrie_live_log.jpg)
 *Real-time Cowrie log output: SSH handshake, key exchange, and failed authentication attempt captured live.*
 
 This level of detail allows reconstruction of exactly what an attacker's client sent — including which SSH algorithms they support, which can be used for attacker fingerprinting.
@@ -72,7 +72,7 @@ All honeypot events are forwarded in real-time to a private Telegram channel via
 
 This screenshot shows an attacker running a full automated recon script immediately after gaining access — collecting hostname, OS version, CPU info, memory, running processes, open ports, cron jobs, and more in a single command chain using `___BSEP_A1B2C3___` as a delimiter to parse output programmatically.
 
-![Telegram Bot - Attacker Commands](screenshots/telegram_commands.jpeg)
+![Telegram Bot - Attacker Commands](screenshots/telegram_commands.jpg)
 *Automated post-exploitation recon script captured via Telegram alert — attacker systematically enumerating the system.*
 
 This is consistent with an automated exploitation framework, not manual hacking.
@@ -91,7 +91,7 @@ After authentication, the attacker immediately:
 3. Set restrictive permissions to lock out the legitimate owner
 4. Attempted further credential-based attacks from the same IP
 
-![Telegram Bot - mdrfckr Campaign](screenshots/telegram_mdrfckr.jpeg)
+![Telegram Bot - mdrfckr Campaign](screenshots/telegram_mdrfckr.jpg)
 *Telegram alert showing the mdrfckr SSH key being written to `authorized_keys` — classic persistence mechanism. Note the AbuseIPDB score of 100% for all involved IPs.*
 
 The key comment `mdrfckr` in the public key string allowed correlation across multiple sessions and IPs, turning a single event into a trackable campaign.
@@ -102,17 +102,17 @@ The key comment `mdrfckr` in the public key string allowed correlation across mu
 
 Cowrie's download capture feature saved all files that attackers attempted to fetch or execute. The files were stored with their SHA256 hashes as filenames — a common convention for malware repositories.
 
-![Malware Downloads - Part 1](screenshots/cowrie_downloads_1.jpeg)
+![Malware Downloads - Part 1](screenshots/cowrie_downloads_1.jpg)
 *Cowrie download directory — captured binaries stored by SHA256 hash. Note file sizes ranging from small stagers (96 bytes) to full payloads (30+ MB).*
 
-![Malware Downloads - Part 2](screenshots/tty_directory.jpeg)
+![Malware Downloads - Part 2](screenshots/tty_directory.jpg)
 *Additional captured samples — timestamps show activity across multiple days, indicating sustained campaign activity.*
 
 ### Attacker Dropper Command
 
 The following TTY session shows the full malware deployment command captured by Cowrie. The attacker uses a multi-fallback download chain (`curl` → `wget` → raw TCP socket via `/dev/tcp`) to fetch a binary from `8.222.174.150:60111`, then executes it with a base64-encoded payload argument.
 
-![TTY Session - Malware Dropper](screenshots/cowrie_tty_session.jpeg)
+![TTY Session - Malware Dropper](screenshots/cowrie_tty_session.jpg)
 *Full attacker TTY session: multi-stage dropper using curl/wget/dev/tcp fallback chain, followed by execution with a large base64-encoded payload — consistent with XMRig miner deployment.*
 
 **Observed TTY techniques:**
@@ -128,7 +128,7 @@ The following TTY session shows the full malware deployment command captured by 
 
 Captured samples were submitted to VirusTotal for static analysis. The primary sample was identified as a **UPX-packed ELF binary** with advanced evasion techniques.
 
-![VirusTotal Analysis](screenshots/virustotal.jpeg)
+![VirusTotal Analysis](screenshots/virustotal.jpg)
 *VirusTotal analysis of captured binary — classified as `miner.cciiu/mirai` by multiple vendors. Cynet: Malicious (score 99). Uses `memfd_create` for fileless execution.*
 
 **Key findings:**
