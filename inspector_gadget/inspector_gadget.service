@@ -1,0 +1,24 @@
+[Unit]
+Description=Inspector Gadget - Cowrie honeypot analysis daemon
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+Group=YOUR_GROUP
+WorkingDirectory=/opt/inspector_gadget
+EnvironmentFile=/opt/inspector_gadget/.env
+ExecStart=/usr/bin/python3 /opt/inspector_gadget/main.py
+Restart=on-failure
+RestartSec=10
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/inspector_gadget
+
+[Install]
+WantedBy=multi-user.target
