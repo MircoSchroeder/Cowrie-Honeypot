@@ -1,6 +1,16 @@
 # 🍯 Cowrie SSH Honeypot — Production Deployment & Threat Intelligence
 
-> A fully operational SSH honeypot running on a public-facing Hetzner VPS, capturing real-world attack campaigns, malware samples, and attacker TTY sessions — with automated Telegram alerting and AbuseIPDB reporting.
+> A fully operational SSH honeypot running on a public-facing Hetzner VPS, capturing real-world attack campaigns, malware samples, and attacker TTY sessions — with automated Telegram alerting, AbuseIPDB reporting, and a custom clustering engine that links sessions into named campaigns.
+
+---
+
+## 🆕 What's New
+
+**Inspector Gadget** ([`inspector_gadget/`](inspector_gadget/)) — a second-generation analysis daemon that clusters tens of thousands of honeypot sessions into named attack campaigns using a two-layer BFS model. Provides an interactive Telegram bot for seeding clusters, generating reports, and discovering new campaigns.
+
+The original `analyze_cowrie.py` has been upgraded to integrate with Inspector Gadget: sessions belonging to known clusters are now suppressed at the alert layer, so the Telegram channel surfaces only new or unclustered activity. The VirusTotal API is also queried for every download for automatic malware classification.
+
+The previous version of the alert script is preserved under [`scripts/legacy/`](scripts/legacy/) for reference.
 
 ---
 
@@ -13,6 +23,7 @@
 - [Threat Campaign: mdrfckr Botnet](#threat-campaign-mdrfckr-botnet)
 - [Captured Malware & Downloads](#captured-malware--downloads)
 - [Malware Analysis: VirusTotal](#malware-analysis-virustotal)
+- [Inspector Gadget — Analysis & Clustering Engine](#inspector-gadget--analysis--clustering-engine)
 - [IOC List](#ioc-list)
 - [Setup](#setup)
 - [Repository Structure](#repository-structure)
@@ -28,8 +39,9 @@ This project documents a **production SSH honeypot** deployed on a real public I
 - Collect and analyze dropped malware samples
 - Identify and document recurring threat campaigns
 - Automate real-time alerting with IP reputation enrichment
+- Cluster historical sessions into named campaigns for longitudinal analysis
 
-**Stack:** Cowrie · Python · Telegram Bot API · AbuseIPDB · Hetzner VPS · Ubuntu 24.04
+**Stack:** Cowrie · Python · SQLite · Telegram Bot API · AbuseIPDB · VirusTotal · Hetzner VPS · Ubuntu 24.04
 
 ---
 
@@ -42,10 +54,10 @@ This project documents a **production SSH honeypot** deployed on a real public I
 | **RAM** | 4 GB |
 | **Cowrie Mode** | Native (non-Docker) |
 | **Honeypot Port** | 22 (redirected via iptables) |
-| **Real SSH Port** | Custom (not disclosed) |
+| **Real SSH Port** | Custom, bound to WireGuard interface only |
 | **Additional Services** | Portainer, Nginx Proxy Manager, Uptime Kuma, Fail2Ban |
 
-Cowrie runs natively on the host (migrated from Docker) for better log access and process isolation. Real SSH traffic is separated via `iptables` port redirection.
+Cowrie runs natively on the host (migrated from Docker) for better log access and process isolation. Real SSH traffic is separated via `iptables` port redirection, and the administrative SSH port is hidden behind a WireGuard VPN — so the honeypot can advertise port 22 publicly while the real management plane is unreachable from the open internet.
 
 ---
 
@@ -62,11 +74,12 @@ This level of detail allows reconstruction of exactly what an attacker's client 
 
 ## Telegram Alert Bot
 
-All honeypot events are forwarded in real-time to a private Telegram channel via `analyze_cowrie.py`. The bot enriches each event with:
+All honeypot events are forwarded in real-time to a private Telegram channel via [`scripts/analyze_cowrie.py`](scripts/analyze_cowrie.py). The bot enriches each event with:
 
-- **AbuseIPDB score** — reputation check per attacker IP
+- **AbuseIPDB score** — reputation check per attacker IP (cached on disk, configurable suppression threshold)
+- **VirusTotal lookup** — automatic hash check on every captured download
 - **Country flag** — geolocation
-- **Event type** — login attempt, successful auth, command executed
+- **Inspector Gadget filter** — sessions belonging to known clusters are suppressed
 
 ### System Reconnaissance
 
@@ -94,7 +107,7 @@ After authentication, the attacker immediately:
 ![Telegram Bot - mdrfckr Campaign](screenshots/telegram_mdrfckr.jpg)
 *Telegram alert showing the mdrfckr SSH key being written to `authorized_keys` — classic persistence mechanism. Note the AbuseIPDB score of 100% for all involved IPs.*
 
-The key comment `mdrfckr` in the public key string allowed correlation across multiple sessions and IPs, turning a single event into a trackable campaign.
+The key comment `mdrfckr` in the public key string allowed correlation across multiple sessions and IPs, turning a single event into a trackable campaign. Inspector Gadget has since formalized this into a cluster (`command_text = mdrfckr`) containing ~7,500 sessions.
 
 ---
 
@@ -147,6 +160,50 @@ Captured samples were submitted to VirusTotal for static analysis. The primary s
 
 The use of `memfd_create` to unpack and execute the payload entirely in memory — with no file written to disk — represents a sophisticated evasion technique commonly seen in advanced Linux malware.
 
+VirusTotal lookups are now automated: every SHA256 captured in a Cowrie download event is checked automatically by `analyze_cowrie.py`, and the detection ratio + threat classification is included in the Telegram alert.
+
+---
+
+## Inspector Gadget — Analysis & Clustering Engine
+
+After months of honeypot operation, the alert-per-session model reached its limits. A single botnet generating 500 sessions produced 500 independent Telegram messages. There was no way to ask *"show me every session where the attacker used the `mdrfckr` SSH key across the full log history."*
+
+**Inspector Gadget** ([`inspector_gadget/`](inspector_gadget/)) is a dedicated long-running daemon that solves this. It ingests Cowrie JSON logs into a normalized SQLite DB, then lets the operator define **attack campaigns** as clusters of sessions linked by shared strong indicators.
+
+### Two-Layer Clustering
+
+- **Layer 1 — Direct seed match.** The operator provides a seed (e.g. `command_text = "mdrfckr"`). All sessions containing that indicator become the cluster's initial membership.
+- **Layer 2 — BFS expansion.** For each seed session, sessions sharing a strong indicator — SSH key fingerprint, download SHA256, or command-sequence hash — are pulled into the cluster. Each new session becomes a new frontier node, and the search continues until no new sessions match.
+
+**Deliberately excluded from BFS:** passwords (too many campaigns share common passwords) and source IPs (attackers rotate them constantly). Letting BFS follow either would cause mega-cluster contamination where unrelated campaigns merge.
+
+### Current Clusters
+
+| Cluster | Sessions | Primary Seed | Notes |
+|---|---|---|---|
+| **mdrfckr** | ~7.5k | `command_text = mdrfckr` | SSH key persistence botnet |
+| **6F6B** | ~37.8k | `command_text = \x6F\x6B` | Massive brute-forcer, only 2 source IPs, ~25k unique passwords |
+
+### Integration with Live Alerting
+
+The live alert script `analyze_cowrie.py` queries the Inspector Gadget DB on every session. If the attacker's IP, password, or any command matches a known cluster, the alert is suppressed — so the Telegram channel only surfaces genuinely new or unclustered activity. This cut alert volume by over 90%.
+
+### Architecture Summary
+
+Seven modules, single systemd service:
+
+```
+main.py        entry point, async event loop
+config.py      env-driven configuration
+database.py    SQLite schema and CRUD
+ingester.py    Cowrie log reader, handles rotation + resume
+analyser.py    seeding and two-layer BFS clustering
+reporter.py    formatted cluster reports with pagination
+bot.py         Telegram command handlers + scheduled weekly report
+```
+
+See [`inspector_gadget/README.md`](inspector_gadget/README.md) for the full command reference, setup instructions, and module breakdown.
+
 ---
 
 ## IOC List
@@ -172,22 +229,21 @@ Indicators of Compromise collected during operation:
 
 ## Setup
 
-See [`scripts/setup_cowrie.sh`](scripts/setup_cowrie.sh) for the full automated installation script.
-
-**Quick overview:**
+### Cowrie + Live Alerts
 
 ```bash
-# 1. Clone and run setup
+# Clone and install Cowrie
 git clone https://github.com/MircoSchroeder/Cowrie-Honeypot
 cd Cowrie-Honeypot
 chmod +x scripts/setup_cowrie.sh
 sudo bash scripts/setup_cowrie.sh
 
-# 2. Configure Telegram bot
+# Configure the alert bot
 cp scripts/analyze_cowrie.example.env scripts/analyze_cowrie.env
-nano scripts/analyze_cowrie.env  # Add your bot token + chat ID
+nano scripts/analyze_cowrie.env   # fill in Telegram, AbuseIPDB, VirusTotal keys
 
-# 3. Start alert bot
+# Run the alert bot
+set -a && source scripts/analyze_cowrie.env && set +a
 python3 scripts/analyze_cowrie.py
 ```
 
@@ -197,37 +253,66 @@ sudo iptables -t nat -A PREROUTING -p tcp --dport 22 -j REDIRECT --to-port 2222
 sudo iptables-save > /etc/iptables/rules.v4
 ```
 
+### Inspector Gadget Daemon
+
+See [`inspector_gadget/README.md`](inspector_gadget/README.md) for full setup. Short version:
+
+```bash
+sudo cp -r inspector_gadget /opt/inspector_gadget
+cd /opt/inspector_gadget
+sudo pip3 install -r requirements.txt --break-system-packages
+sudo cp .env.example .env && sudo nano .env
+sudo cp inspector_gadget.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now inspector_gadget
+```
+
 ---
 
 ## Repository Structure
 
 ```
 Cowrie-Honeypot/
-├── README.md
+├── README.md                            # This file
 ├── screenshots/
-│   ├── cowrie_live_log.jpeg        # Live Cowrie debug output
-│   ├── cowrie_downloads_1.jpeg     # Captured malware samples (part 1)
-│   ├── cowrie_downloads_2.jpeg     # Captured malware samples (part 2)
-│   ├── cowrie_tty_session.jpeg     # Full attacker TTY session
-│   ├── telegram_commands.jpeg      # Telegram alert: recon commands
-│   ├── telegram_mdrfckr.jpeg       # Telegram alert: mdrfckr campaign
-│   └── virustotal.jpeg             # VirusTotal malware analysis
-└── scripts/
-    ├── setup_cowrie.sh             # Automated Cowrie installation
-    ├── analyze_cowrie.py           # Telegram alert bot
-    └── analyze_cowrie.example.env  # Config template
+│   ├── cowrie_live_log.jpg              # Live Cowrie debug output
+│   ├── cowrie_downloads_1.jpg           # Captured malware samples
+│   ├── cowrie_tty_session.jpg           # Full attacker TTY session
+│   ├── tty_directory.jpg                # TTY session directory
+│   ├── telegram_commands.jpg            # Telegram alert: recon commands
+│   ├── telegram_mdrfckr.jpg             # Telegram alert: mdrfckr campaign
+│   └── virustotal.jpg                   # VirusTotal malware analysis
+├── scripts/
+│   ├── setup_cowrie.sh                  # Automated Cowrie installation
+│   ├── analyze_cowrie.py                # Live Telegram alert bot (v2, IG-integrated)
+│   ├── analyze_cowrie.example.env       # Config template
+│   └── legacy/
+│       └── analyze_cowrie.py            # v1 of the alert bot, kept for reference
+└── inspector_gadget/                    # Clustering & analysis daemon
+    ├── README.md                        # Full module documentation
+    ├── main.py                          # Entry point
+    ├── config.py                        # Env-driven config
+    ├── database.py                      # SQLite layer
+    ├── ingester.py                      # Log reader
+    ├── analyser.py                      # Clustering engine
+    ├── reporter.py                      # Report formatters
+    ├── bot.py                           # Telegram commands
+    ├── requirements.txt                 # python-telegram-bot
+    ├── inspector_gadget.service         # systemd unit
+    └── .env.example                     # Config template
 ```
 
 ---
 
 ## Skills Demonstrated
 
-- **SSH Honeypot Deployment** — Production VPS, iptables redirection, native Cowrie
-- **Threat Intelligence** — Campaign correlation via SSH key fingerprinting across multiple IPs
-- **Malware Analysis** — Static analysis with VirusTotal, identifying UPX packing, fileless execution, miner families
-- **Python Automation** — Real-time log parsing, Telegram API integration, AbuseIPDB enrichment
-- **Linux Administration** — systemd service management, iptables, log rotation, process isolation
-- **Incident Documentation** — IOC extraction, TTY session analysis, dropper command reconstruction
+- **SSH Honeypot Deployment** — Production VPS, iptables redirection, native Cowrie, WireGuard-isolated admin plane
+- **Threat Intelligence** — Campaign correlation via SSH key fingerprinting, command-sequence hashing, two-layer BFS clustering
+- **Malware Analysis** — Static analysis with VirusTotal, identifying UPX packing, fileless execution via `memfd_create`, miner families
+- **Python Automation** — Long-running daemons, async Telegram bots, SQLite schema design, real-time log parsing
+- **Linux Administration** — systemd service management, iptables, log rotation handling, process isolation, systemd hardening (`ProtectSystem`, `NoNewPrivileges`)
+- **Data Engineering** — Normalized schema for session/command/credential/download/key data, read-position tracking across rotated log files
+- **Incident Documentation** — IOC extraction, TTY session analysis, dropper command reconstruction, campaign attribution
 
 ---
 
