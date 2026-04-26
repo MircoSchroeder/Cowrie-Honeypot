@@ -1,1 +1,0 @@
-python-telegram-bot[job-scheduler]>=20.0
